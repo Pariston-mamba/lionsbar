@@ -1,6 +1,6 @@
 import discord
-from game import RANKS
 from formatter import fmt_hand
+from game import MAX_PLAY_CARDS
 
 
 VIEW_TIMEOUT = 1800
@@ -21,10 +21,10 @@ class JoinView(discord.ui.View):
 
 
 class AllHandsView(discord.ui.View):
-    def __init__(self, cog, session):
+    def __init__(self, cog, guild_id: int):
         super().__init__(timeout=VIEW_TIMEOUT)
         self.cog = cog
-        self.guild_id = session.guild_id
+        self.guild_id = guild_id
 
     @discord.ui.button(label="查看我的手牌", style=discord.ButtonStyle.primary, emoji="🃏")
     async def show_my_hand(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -41,7 +41,7 @@ class AllHandsView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            f"你的手牌：\n{fmt_hand(player.hand)}",
+            f"本輪桌面牌：**{session.table_rank}**\n{fmt_hand(player.hand)}",
             ephemeral=True,
         )
 
@@ -71,11 +71,15 @@ class TurnActionView(discord.ui.View):
             await interaction.response.send_message("你不是本局玩家。", ephemeral=True)
             return
 
-        hand_view = HandView(self.cog, self.current_player_id, player.hand)
+        if len(player.hand) == 0:
+            await interaction.response.send_message("你本輪已經沒有手牌。", ephemeral=True)
+            return
 
         await interaction.response.send_message(
-            f"你的手牌：\n{fmt_hand(player.hand)}\n請選擇要打出的牌。",
-            view=hand_view,
+            f"本輪桌面牌：**{session.table_rank}**\n"
+            f"{fmt_hand(player.hand)}\n"
+            f"請選擇 1～{MAX_PLAY_CARDS} 張牌。你將宣稱它們都是 **{session.table_rank}**。",
+            view=HandView(self.cog, self.current_player_id, player.hand),
             ephemeral=True,
         )
 
@@ -88,23 +92,23 @@ class HandView(discord.ui.View):
         self.selected_indices: list[int] = []
 
         for i, card in enumerate(hand):
-            btn = discord.ui.Button(
-                label=f"{card}",
+            button = discord.ui.Button(
+                label=card,
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"card_{i}",
                 row=0,
             )
-            btn.callback = self._make_card_callback(i)
-            self.add_item(btn)
+            button.callback = self._make_card_callback(i)
+            self.add_item(button)
 
-        confirm_btn = discord.ui.Button(
+        confirm_button = discord.ui.Button(
             label="確認出牌",
             style=discord.ButtonStyle.success,
             emoji="✔",
             row=1,
         )
-        confirm_btn.callback = self.confirm_play
-        self.add_item(confirm_btn)
+        confirm_button.callback = self.confirm_play
+        self.add_item(confirm_button)
 
     def _make_card_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
@@ -115,6 +119,12 @@ class HandView(discord.ui.View):
             if index in self.selected_indices:
                 self.selected_indices.remove(index)
             else:
+                if len(self.selected_indices) >= MAX_PLAY_CARDS:
+                    await interaction.response.send_message(
+                        f"一次最多只能選 {MAX_PLAY_CARDS} 張牌。",
+                        ephemeral=True,
+                    )
+                    return
                 self.selected_indices.append(index)
 
             self._refresh_buttons()
@@ -131,48 +141,56 @@ class HandView(discord.ui.View):
             await interaction.response.send_message("請先選擇要打出的牌！", ephemeral=True)
             return
 
-        claim_view = ClaimView(self.cog, self.current_player_id, self.selected_indices)
-
-        await interaction.response.send_message(
-            f"選了 {len(self.selected_indices)} 張牌，聲稱是？",
-            view=claim_view,
-            ephemeral=True,
-        )
+        await self.cog.handle_play(interaction, self.selected_indices)
 
     def _refresh_buttons(self):
         for item in self.children:
             if isinstance(item, discord.ui.Button) and item.custom_id and item.custom_id.startswith("card_"):
-                idx = int(item.custom_id.split("_")[1])
+                index = int(item.custom_id.split("_")[1])
                 item.style = (
                     discord.ButtonStyle.primary
-                    if idx in self.selected_indices
+                    if index in self.selected_indices
                     else discord.ButtonStyle.secondary
                 )
 
 
-class ClaimView(discord.ui.View):
-    def __init__(self, cog, current_player_id: int, selected_indices: list[int]):
+class DoubtView(discord.ui.View):
+    def __init__(self, cog, doubter_id: int, allow_pass: bool):
         super().__init__(timeout=VIEW_TIMEOUT)
         self.cog = cog
-        self.current_player_id = current_player_id
-        self.selected_indices = selected_indices
+        self.doubter_id = doubter_id
 
-        for rank in RANKS:
-            btn = discord.ui.Button(
-                label=f"聲稱是 {rank}",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"claim_{rank}",
+        doubt_button = discord.ui.Button(
+            label="質疑！",
+            style=discord.ButtonStyle.danger,
+            emoji="🔍",
+            row=0,
+        )
+        doubt_button.callback = self.doubt
+        self.add_item(doubt_button)
+
+        if allow_pass:
+            pass_button = discord.ui.Button(
+                label="不質疑，繼續出牌",
+                style=discord.ButtonStyle.secondary,
+                emoji="✅",
                 row=0,
             )
-            btn.callback = self._make_claim_callback(rank)
-            self.add_item(btn)
+            pass_button.callback = self.pass_turn
+            self.add_item(pass_button)
 
-    def _make_claim_callback(self, rank: str):
-        async def callback(interaction: discord.Interaction):
-            if interaction.user.id != self.current_player_id:
-                await interaction.response.send_message("還沒輪到你！", ephemeral=True)
-                return
+    async def doubt(self, interaction: discord.Interaction):
+        if interaction.user.id != self.doubter_id:
+            await interaction.response.send_message("還沒輪到你質疑！", ephemeral=True)
+            return
 
-            await self.cog.handle_play(interaction, self.selected_indices, rank)
+        self.stop()
+        await self.cog.handle_doubt(interaction)
 
-        return callback
+    async def pass_turn(self, interaction: discord.Interaction):
+        if interaction.user.id != self.doubter_id:
+            await interaction.response.send_message("還沒輪到你！", ephemeral=True)
+            return
+
+        self.stop()
+        await self.cog.handle_pass(interaction)
