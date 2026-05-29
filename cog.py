@@ -5,7 +5,7 @@ from formatter import (
     fmt_hp_board, fmt_hand, fmt_reveal, fmt_play_announce,
     fmt_eliminated, fmt_winner, fmt_lobby,
 )
-from views import JoinView, HandView, ClaimView, DoubtView
+from views import JoinView, AllHandsView, TurnActionView, ClaimView
 
 
 VIEW_TIMEOUT = 1800
@@ -104,10 +104,12 @@ class LionsBarCog(commands.Cog):
             return
 
         await interaction.response.send_message(
-            f"🎮 **Lion's Bar 開始！**\n\n{fmt_hp_board(session)}"
+            f"🎮 **Lion's Bar 開始！**\n\n{fmt_hp_board(session)}\n"
+            "所有玩家可以點下方按鈕查看自己的手牌。",
+            view=AllHandsView(self, session),
         )
 
-        await self._prompt_play(interaction.channel, session)
+        await self._prompt_turn(interaction.channel, session)
 
     async def handle_play(self, interaction: discord.Interaction, indices: list[int], claimed_rank: str):
         session = self.get_session(interaction.guild_id)
@@ -176,7 +178,13 @@ class LionsBarCog(commands.Cog):
             session.advance_turn()
 
         session.reset_round()
-        await self._prompt_play(interaction.channel, session)
+
+        await interaction.channel.send(
+            "新一輪開始，所有玩家可以點下方按鈕查看自己的新手牌。",
+            view=AllHandsView(self, session),
+        )
+
+        await self._prompt_turn(interaction.channel, session)
 
     async def handle_pass(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
@@ -187,46 +195,37 @@ class LionsBarCog(commands.Cog):
 
         await interaction.response.edit_message(content="✅ 放行", view=None)
         session.advance_turn()
-        await self._prompt_play(interaction.channel, session)
+        await self._prompt_turn(interaction.channel, session)
 
-    async def _prompt_play(self, channel: discord.TextChannel, session: GameSession):
+    async def _prompt_turn(self, channel: discord.TextChannel, session: GameSession):
         current = session.get_current_player()
 
-        hand_view = HandView(self, current.discord_id, current.hand)
-        hand_msg = fmt_hand(current.hand)
-
         await channel.send(
-            f"<@{current.discord_id}> 輪到你出牌！\n"
-            f"{hand_msg}\n"
-            "選好牌後點「確認出牌」。",
-            view=hand_view,
+            f"<@{current.discord_id}> 輪到你出牌！請點下方按鈕出牌。",
+            view=TurnActionView(self, session.guild_id, current.discord_id),
         )
 
-        confirm_btn = ConfirmPlayView(self, current.discord_id, hand_view)
-        await channel.send(view=confirm_btn)
 
-
-class ConfirmPlayView(discord.ui.View):
-    def __init__(self, cog, current_player_id: int, hand_view: "HandView"):
+class DoubtView(discord.ui.View):
+    def __init__(self, cog, doubter_id: int):
         super().__init__(timeout=VIEW_TIMEOUT)
         self.cog = cog
-        self.current_player_id = current_player_id
-        self.hand_view = hand_view
+        self.doubter_id = doubter_id
 
-    @discord.ui.button(label="確認出牌", style=discord.ButtonStyle.success, emoji="✔")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.current_player_id:
+    @discord.ui.button(label="質疑！", style=discord.ButtonStyle.danger, emoji="🔍")
+    async def doubt(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.doubter_id:
+            await interaction.response.send_message("還沒輪到你質疑！", ephemeral=True)
+            return
+
+        self.stop()
+        await self.cog.handle_doubt(interaction)
+
+    @discord.ui.button(label="放行", style=discord.ButtonStyle.secondary, emoji="✅")
+    async def pass_turn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.doubter_id:
             await interaction.response.send_message("還沒輪到你！", ephemeral=True)
             return
 
-        if not self.hand_view.selected_indices:
-            await interaction.response.send_message("請先選擇要打出的牌！", ephemeral=True)
-            return
-
-        claim_view = ClaimView(self.cog, self.current_player_id, self.hand_view.selected_indices)
-
-        await interaction.response.send_message(
-            f"選了 {len(self.hand_view.selected_indices)} 張牌，聲稱是？",
-            view=claim_view,
-            ephemeral=True,
-        )
+        self.stop()
+        await self.cog.handle_pass(interaction)
