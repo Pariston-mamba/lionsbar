@@ -4,7 +4,7 @@ from flask import Flask
 from threading import Thread
 import os
 from dotenv import load_dotenv
-from cog import LiarsBarCog
+from cog import LionsBarCog
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -14,7 +14,7 @@ app = Flask("")
 
 @app.route("/")
 def home():
-    return "Lionsbar Bot is alive!"
+    return "Lion's Bar Bot is alive!"
 
 def run_web():
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
@@ -30,8 +30,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"✅ 機器人已上線：{bot.user}")
-    await bot.add_cog(LiarsBarCog(bot))
+    print(f"✅ Lion's Bar 機器人已上線：{bot.user}")
+    await bot.add_cog(LionsBarCog(bot))
     await bot.tree.sync()
     print("✅ Slash Commands 同步完成")
 
