@@ -8,7 +8,7 @@ from formatter import (
 from views import JoinView, HandView, ClaimView, DoubtView
 
 
-VIEW_TIMEOUT = 1800  # 30 分鐘
+VIEW_TIMEOUT = 1800
 
 
 class LionsBarCog(commands.Cog):
@@ -41,7 +41,7 @@ class LionsBarCog(commands.Cog):
         await interaction.response.send_message(
             "🦁 **Lion's Bar 房間已建立！**\n"
             "點下方按鈕加入，集齊 2～6 人後開始遊戲。\n"
-            "提示：按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。\n\n"
+            "**提示：按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。**\n\n"
             + fmt_lobby(self.sessions[guild_id]),
             view=view,
         )
@@ -133,8 +133,7 @@ class LionsBarCog(commands.Cog):
         doubt_view = DoubtView(self, doubter.discord_id)
 
         await interaction.channel.send(
-            f"<@{doubter.discord_id}> 你要質疑嗎？\n"
-            "提示：本回合按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。",
+            f"<@{doubter.discord_id}> 你要質疑嗎？",
             view=doubt_view,
         )
 
@@ -199,8 +198,7 @@ class LionsBarCog(commands.Cog):
         await channel.send(
             f"<@{current.discord_id}> 輪到你出牌！\n"
             f"{hand_msg}\n"
-            "選好牌後點「確認出牌」。\n"
-            "提示：本回合按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。",
+            "選好牌後點「確認出牌」。",
             view=hand_view,
         )
 
