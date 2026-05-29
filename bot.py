@@ -13,7 +13,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("找不到 DISCORD_TOKEN，請在 Render 的 Environment Variables 設定它。")
+    raise RuntimeError("找不到 DISCORD_TOKEN，請在 Render 的 Environment Variables 設定 DISCORD_TOKEN。")
 
 
 app = Flask("")
