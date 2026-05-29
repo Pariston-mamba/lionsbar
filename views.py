@@ -19,10 +19,8 @@ class JoinView(discord.ui.View):
 
 
 class HandView(discord.ui.View):
-    """查看手牌 + 選牌按鈕（Ephemeral，只有當前玩家看得到）"""
-
     def __init__(self, cog, current_player_id: int, hand: list[str]):
-        super().__init__(timeout=60)
+        super().__init__(timeout=VIEW_TIMEOUT)
         self.cog = cog
         self.current_player_id = current_player_id
         self.selected_indices: list[int] = []
@@ -43,17 +41,21 @@ class HandView(discord.ui.View):
                 await interaction.response.send_message("這不是你的手牌！", ephemeral=True)
                 return
 
+            await interaction.response.defer()
+
             if index in self.selected_indices:
                 self.selected_indices.remove(index)
             else:
                 self.selected_indices.append(index)
 
-            self._refresh_buttons(interaction)
-            await interaction.response.edit_message(view=self)
+            self._refresh_buttons()
+
+            if interaction.message:
+                await interaction.message.edit(view=self)
 
         return callback
 
-    def _refresh_buttons(self, interaction):
+    def _refresh_buttons(self):
         for item in self.children:
             if isinstance(item, discord.ui.Button) and item.custom_id and item.custom_id.startswith("card_"):
                 idx = int(item.custom_id.split("_")[1])
