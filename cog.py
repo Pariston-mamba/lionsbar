@@ -2,13 +2,10 @@ import discord
 from discord.ext import commands
 from game import GameSession, GameState
 from formatter import (
-    fmt_hp_board, fmt_hand, fmt_reveal, fmt_play_announce,
+    fmt_hp_board, fmt_reveal, fmt_play_announce,
     fmt_eliminated, fmt_winner, fmt_lobby,
 )
-from views import JoinView, AllHandsView, TurnActionView, ClaimView
-
-
-VIEW_TIMEOUT = 1800
+from views import JoinView, AllHandsView, TurnActionView, DoubtView
 
 
 class LionsBarCog(commands.Cog):
@@ -36,37 +33,28 @@ class LionsBarCog(commands.Cog):
             return
 
         self.sessions[guild_id] = GameSession(guild_id, interaction.channel_id)
-        view = JoinView(self)
 
         await interaction.response.send_message(
             "🦁 **Lion's Bar 房間已建立！**\n"
             "點下方按鈕加入，集齊 2～6 人後開始遊戲。\n"
             "**提示：按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。**\n\n"
             + fmt_lobby(self.sessions[guild_id]),
-            view=view,
+            view=JoinView(self),
         )
 
     @discord.app_commands.command(name="stop", description="強制結束目前遊戲")
     async def stop(self, interaction: discord.Interaction):
-        guild_id = interaction.guild_id
-
-        if guild_id not in self.sessions:
+        if interaction.guild_id not in self.sessions:
             await interaction.response.send_message("目前沒有進行中的遊戲。", ephemeral=True)
             return
 
-        del self.sessions[guild_id]
+        del self.sessions[interaction.guild_id]
         await interaction.response.send_message("遊戲已強制結束。現在可以重新使用 `/create`。")
 
     @discord.app_commands.command(name="reset", description="重置卡住的 Lion's Bar 遊戲")
     async def reset(self, interaction: discord.Interaction):
-        guild_id = interaction.guild_id
-
-        if guild_id in self.sessions:
-            del self.sessions[guild_id]
-
-        await interaction.response.send_message(
-            "Lion's Bar 已重置。現在可以重新使用 `/create` 建立房間。"
-        )
+        self.sessions.pop(interaction.guild_id, None)
+        await interaction.response.send_message("Lion's Bar 已重置。現在可以重新使用 `/create`。")
 
     @discord.app_commands.command(name="status", description="查看目前血量狀態")
     async def status(self, interaction: discord.Interaction):
@@ -76,7 +64,9 @@ class LionsBarCog(commands.Cog):
             await interaction.response.send_message("目前沒有進行中的遊戲。", ephemeral=True)
             return
 
-        await interaction.response.send_message(fmt_hp_board(session))
+        await interaction.response.send_message(
+            f"本輪桌面牌：**{session.table_rank}**\n\n{fmt_hp_board(session)}"
+        )
 
     async def handle_join(self, interaction: discord.Interaction):
         session = self.get_or_create_session(interaction.guild_id, interaction.channel_id)
@@ -104,55 +94,75 @@ class LionsBarCog(commands.Cog):
             return
 
         await interaction.response.send_message(
-            f"🎮 **Lion's Bar 開始！**\n\n{fmt_hp_board(session)}\n"
+            f"🎮 **Lion's Bar 開始！**\n"
+            f"本輪桌面牌：**{session.table_rank}**\n\n"
+            f"{fmt_hp_board(session)}\n"
             "所有玩家可以點下方按鈕查看自己的手牌。",
-            view=AllHandsView(self, session),
+            view=AllHandsView(self, session.guild_id),
         )
 
         await self._prompt_turn(interaction.channel, session)
 
-    async def handle_play(self, interaction: discord.Interaction, indices: list[int], claimed_rank: str):
+    async def handle_play(self, interaction: discord.Interaction, indices: list[int]):
         session = self.get_session(interaction.guild_id)
 
         if not session:
-            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立。", ephemeral=True)
             return
 
-        ok, msg = session.play_cards(interaction.user.id, indices, claimed_rank)
+        ok, msg = session.play_cards(interaction.user.id, indices)
 
         if not ok:
             await interaction.response.send_message(msg, ephemeral=True)
             return
 
         claim = session.last_claim
-        announce = fmt_play_announce(interaction.user.display_name, claimed_rank, claim.claimed_count)
 
         await interaction.response.edit_message(content="出牌完成！", view=None)
-        await interaction.channel.send(announce)
+        await interaction.channel.send(
+            fmt_play_announce(interaction.user.display_name, claim.claimed_rank, claim.claimed_count)
+        )
 
-        session.advance_turn()
+        contenders = session.other_players_with_cards(claim.player_id)
+
+        if not contenders:
+            await interaction.channel.send("所有其他玩家都已出光手牌，本輪結束並重新發牌。")
+            session.reset_round()
+            await self._announce_new_round(interaction.channel, session)
+            await self._prompt_turn(interaction.channel, session)
+            return
+
+        if len(contenders) == 1:
+            forced = contenders[0]
+            session.set_current_player(forced.discord_id)
+            await interaction.channel.send(
+                f"<@{forced.discord_id}> 只剩你還能處理這次出牌，你必須質疑！",
+                view=DoubtView(self, forced.discord_id, allow_pass=False),
+            )
+            return
+
+        session.advance_turn(skip_empty=True)
         doubter = session.get_current_player()
-        doubt_view = DoubtView(self, doubter.discord_id)
 
         await interaction.channel.send(
-            f"<@{doubter.discord_id}> 你要質疑嗎？",
-            view=doubt_view,
+            f"<@{doubter.discord_id}> 你要質疑，還是繼續出牌？",
+            view=DoubtView(self, doubter.discord_id, allow_pass=True),
         )
 
     async def handle_doubt(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
 
         if not session:
-            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立。", ephemeral=True)
             return
 
-        is_lying = session.check_lie()
         claim = session.last_claim
 
         if not claim:
             await interaction.response.send_message("目前沒有可質疑的出牌。", ephemeral=True)
             return
 
+        is_lying = session.check_lie()
         loser_id = claim.player_id if is_lying else interaction.user.id
         loser = session.get_player(loser_id)
 
@@ -172,60 +182,48 @@ class LionsBarCog(commands.Cog):
             del self.sessions[interaction.guild_id]
             return
 
-        await interaction.channel.send(fmt_hp_board(session))
-
-        if not loser.is_alive:
-            session.advance_turn()
+        if loser.is_alive:
+            session.set_current_player(loser.discord_id)
+        else:
+            session.advance_turn(skip_empty=False)
 
         session.reset_round()
 
-        await interaction.channel.send(
-            "新一輪開始，所有玩家可以點下方按鈕查看自己的新手牌。",
-            view=AllHandsView(self, session),
-        )
-
+        await interaction.channel.send(fmt_hp_board(session))
+        await self._announce_new_round(interaction.channel, session)
         await self._prompt_turn(interaction.channel, session)
 
     async def handle_pass(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
 
         if not session:
-            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立。", ephemeral=True)
             return
 
-        await interaction.response.edit_message(content="✅ 放行", view=None)
-        session.advance_turn()
+        current = session.get_current_player()
+
+        if interaction.user.id != current.discord_id:
+            await interaction.response.send_message("還沒輪到你。", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(content="✅ 選擇不質疑，繼續出牌。", view=None)
         await self._prompt_turn(interaction.channel, session)
+
+    async def _announce_new_round(self, channel: discord.TextChannel, session: GameSession):
+        await channel.send(
+            f"新一輪開始！本輪桌面牌：**{session.table_rank}**\n"
+            "所有玩家可以點下方按鈕查看自己的新手牌。",
+            view=AllHandsView(self, session.guild_id),
+        )
 
     async def _prompt_turn(self, channel: discord.TextChannel, session: GameSession):
         current = session.get_current_player()
 
+        if len(current.hand) == 0:
+            session.advance_turn(skip_empty=True)
+            current = session.get_current_player()
+
         await channel.send(
-            f"<@{current.discord_id}> 輪到你出牌！請點下方按鈕出牌。",
+            f"<@{current.discord_id}> 輪到你出牌！本輪你只能宣稱自己出的是 **{session.table_rank}**。",
             view=TurnActionView(self, session.guild_id, current.discord_id),
         )
-
-
-class DoubtView(discord.ui.View):
-    def __init__(self, cog, doubter_id: int):
-        super().__init__(timeout=VIEW_TIMEOUT)
-        self.cog = cog
-        self.doubter_id = doubter_id
-
-    @discord.ui.button(label="質疑！", style=discord.ButtonStyle.danger, emoji="🔍")
-    async def doubt(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.doubter_id:
-            await interaction.response.send_message("還沒輪到你質疑！", ephemeral=True)
-            return
-
-        self.stop()
-        await self.cog.handle_doubt(interaction)
-
-    @discord.ui.button(label="放行", style=discord.ButtonStyle.secondary, emoji="✅")
-    async def pass_turn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.doubter_id:
-            await interaction.response.send_message("還沒輪到你！", ephemeral=True)
-            return
-
-        self.stop()
-        await self.cog.handle_pass(interaction)
