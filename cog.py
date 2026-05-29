@@ -8,7 +8,7 @@ from formatter import (
 from views import JoinView, HandView, ClaimView, DoubtView
 
 
-class LiarsBarCog(commands.Cog):
+class LionsBarCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.sessions: dict[int, GameSession] = {}
@@ -21,9 +21,7 @@ class LiarsBarCog(commands.Cog):
             self.sessions[guild_id] = GameSession(guild_id, channel_id)
         return self.sessions[guild_id]
 
-    # ── Slash Commands ────────────────────────────────────────
-
-    @discord.app_commands.command(name="create", description="建立一個新的 Liar's Bar 房間")
+    @discord.app_commands.command(name="create", description="建立一個新的 Lion's Bar 房間")
     async def create(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         if guild_id in self.sessions and self.sessions[guild_id].state == GameState.PLAYING:
@@ -33,7 +31,7 @@ class LiarsBarCog(commands.Cog):
         self.sessions[guild_id] = GameSession(guild_id, interaction.channel_id)
         view = JoinView(self)
         await interaction.response.send_message(
-            "🃏 **Liar's Bar 房間已建立！**\n點下方按鈕加入，集齊 2～6 人後開始遊戲。\n\n" + fmt_lobby(self.sessions[guild_id]),
+            "🦁 **Lion's Bar 房間已建立！**\n點下方按鈕加入，集齊 2～6 人後開始遊戲。\n\n" + fmt_lobby(self.sessions[guild_id]),
             view=view,
         )
 
@@ -53,8 +51,6 @@ class LiarsBarCog(commands.Cog):
             await interaction.response.send_message("目前沒有進行中的遊戲。", ephemeral=True)
             return
         await interaction.response.send_message(fmt_hp_board(session))
-
-    # ── 按鈕 Handlers ─────────────────────────────────────────
 
     async def handle_join(self, interaction: discord.Interaction):
         session = self.get_or_create_session(interaction.guild_id, interaction.channel_id)
@@ -78,7 +74,7 @@ class LiarsBarCog(commands.Cog):
             return
 
         await interaction.response.send_message(
-            f"🎮 **遊戲開始！**\n\n{fmt_hp_board(session)}"
+            f"🎮 **Lion's Bar 開始！**\n\n{fmt_hp_board(session)}"
         )
         await self._prompt_play(interaction.channel, session)
 
@@ -147,8 +143,6 @@ class LiarsBarCog(commands.Cog):
         await interaction.response.edit_message(content="✅ 放行", view=None)
         session.advance_turn()
         await self._prompt_play(interaction.channel, session)
-
-    # ── 內部工具 ──────────────────────────────────────────────
 
     async def _prompt_play(self, channel: discord.TextChannel, session: GameSession):
         current = session.get_current_player()
