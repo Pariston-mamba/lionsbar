@@ -14,7 +14,7 @@ app = Flask("")
 
 @app.route("/")
 def home():
-    return "Liar's Bar Bot is alive!"
+    return "Lionsbar Bot is alive!"
 
 def run_web():
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
