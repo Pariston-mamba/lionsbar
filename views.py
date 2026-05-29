@@ -19,6 +19,20 @@ class JoinView(discord.ui.View):
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.handle_start(interaction)
 
+    @discord.ui.button(label="查看規則", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
+    async def rules(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "**Lion's Bar 規則**\n"
+            "每輪會指定一種桌面牌，例如 A。\n"
+            "玩家輪流出 1～3 張牌，並宣稱它們都是桌面牌。\n"
+            "Joker 可當作任意桌面牌。\n"
+            "下一位玩家可以質疑，或選擇不質疑並繼續出牌。\n"
+            "如果出牌者說謊，出牌者扣 1 血；如果質疑錯誤，質疑者扣 1 血。\n"
+            "手牌出光的玩家本輪跳過。\n"
+            "只剩一位玩家有手牌時，該玩家必須質疑。\n"
+            "活到最後的人獲勝。",
+            ephemeral=True,
+        )
 
 class AllHandsView(discord.ui.View):
     def __init__(self, cog, guild_id: int):
