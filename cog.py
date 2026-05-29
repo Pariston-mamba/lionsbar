@@ -8,6 +8,9 @@ from formatter import (
 from views import JoinView, HandView, ClaimView, DoubtView
 
 
+VIEW_TIMEOUT = 1800  # 30 分鐘
+
+
 class LionsBarCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -24,51 +27,78 @@ class LionsBarCog(commands.Cog):
     @discord.app_commands.command(name="create", description="建立一個新的 Lion's Bar 房間")
     async def create(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
+
         if guild_id in self.sessions and self.sessions[guild_id].state == GameState.PLAYING:
-            await interaction.response.send_message("已經有遊戲在進行中！用 `/stop` 結束後再建立。", ephemeral=True)
+            await interaction.response.send_message(
+                "已經有遊戲在進行中！如果按鈕失效或遊戲卡住，請先用 `/reset`，再用 `/create`。",
+                ephemeral=True,
+            )
             return
 
         self.sessions[guild_id] = GameSession(guild_id, interaction.channel_id)
         view = JoinView(self)
+
         await interaction.response.send_message(
-            "🦁 **Lion's Bar 房間已建立！**\n點下方按鈕加入，集齊 2～6 人後開始遊戲。\n\n" + fmt_lobby(self.sessions[guild_id]),
+            "🦁 **Lion's Bar 房間已建立！**\n"
+            "點下方按鈕加入，集齊 2～6 人後開始遊戲。\n"
+            "提示：按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。\n\n"
+            + fmt_lobby(self.sessions[guild_id]),
             view=view,
         )
 
     @discord.app_commands.command(name="stop", description="強制結束目前遊戲")
     async def stop(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
+
         if guild_id not in self.sessions:
             await interaction.response.send_message("目前沒有進行中的遊戲。", ephemeral=True)
             return
+
         del self.sessions[guild_id]
-        await interaction.response.send_message("遊戲已強制結束。")
+        await interaction.response.send_message("遊戲已強制結束。現在可以重新使用 `/create`。")
+
+    @discord.app_commands.command(name="reset", description="重置卡住的 Lion's Bar 遊戲")
+    async def reset(self, interaction: discord.Interaction):
+        guild_id = interaction.guild_id
+
+        if guild_id in self.sessions:
+            del self.sessions[guild_id]
+
+        await interaction.response.send_message(
+            "Lion's Bar 已重置。現在可以重新使用 `/create` 建立房間。"
+        )
 
     @discord.app_commands.command(name="status", description="查看目前血量狀態")
     async def status(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
+
         if not session or session.state != GameState.PLAYING:
             await interaction.response.send_message("目前沒有進行中的遊戲。", ephemeral=True)
             return
+
         await interaction.response.send_message(fmt_hp_board(session))
 
     async def handle_join(self, interaction: discord.Interaction):
         session = self.get_or_create_session(interaction.guild_id, interaction.channel_id)
         ok, msg = session.add_player(interaction.user.id, interaction.user.display_name)
+
         if not ok:
             await interaction.response.send_message(msg, ephemeral=True)
             return
+
         await interaction.response.send_message(
             f"✅ **{interaction.user.display_name}** 加入了房間！\n\n{fmt_lobby(session)}"
         )
 
     async def handle_start(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
+
         if not session:
             await interaction.response.send_message("請先用 `/create` 建立房間。", ephemeral=True)
             return
 
         ok, msg = session.start_game()
+
         if not ok:
             await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -76,15 +106,18 @@ class LionsBarCog(commands.Cog):
         await interaction.response.send_message(
             f"🎮 **Lion's Bar 開始！**\n\n{fmt_hp_board(session)}"
         )
+
         await self._prompt_play(interaction.channel, session)
 
     async def handle_play(self, interaction: discord.Interaction, indices: list[int], claimed_rank: str):
         session = self.get_session(interaction.guild_id)
+
         if not session:
-            await interaction.response.send_message("找不到遊戲。", ephemeral=True)
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
             return
 
         ok, msg = session.play_cards(interaction.user.id, indices, claimed_rank)
+
         if not ok:
             await interaction.response.send_message(msg, ephemeral=True)
             return
@@ -98,18 +131,27 @@ class LionsBarCog(commands.Cog):
         session.advance_turn()
         doubter = session.get_current_player()
         doubt_view = DoubtView(self, doubter.discord_id)
+
         await interaction.channel.send(
-            f"<@{doubter.discord_id}> 你要質疑嗎？",
+            f"<@{doubter.discord_id}> 你要質疑嗎？\n"
+            "提示：本回合按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。",
             view=doubt_view,
         )
 
     async def handle_doubt(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
+
         if not session:
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
             return
 
         is_lying = session.check_lie()
         claim = session.last_claim
+
+        if not claim:
+            await interaction.response.send_message("目前沒有可質疑的出牌。", ephemeral=True)
+            return
+
         loser_id = claim.player_id if is_lying else interaction.user.id
         loser = session.get_player(loser_id)
 
@@ -117,10 +159,12 @@ class LionsBarCog(commands.Cog):
         await interaction.channel.send(fmt_reveal(claim, is_lying, loser.display_name))
 
         loser, eliminated = session.apply_damage(loser_id)
+
         if eliminated:
             await interaction.channel.send(fmt_eliminated(loser.display_name, loser.hp))
 
         winner = session.check_winner()
+
         if winner:
             await interaction.channel.send(fmt_hp_board(session))
             await interaction.channel.send(fmt_winner(winner.display_name))
@@ -137,7 +181,9 @@ class LionsBarCog(commands.Cog):
 
     async def handle_pass(self, interaction: discord.Interaction):
         session = self.get_session(interaction.guild_id)
+
         if not session:
+            await interaction.response.send_message("找不到遊戲。請用 `/create` 重新建立房間。", ephemeral=True)
             return
 
         await interaction.response.edit_message(content="✅ 放行", view=None)
@@ -151,7 +197,10 @@ class LionsBarCog(commands.Cog):
         hand_msg = fmt_hand(current.hand)
 
         await channel.send(
-            f"<@{current.discord_id}> 輪到你出牌！\n{hand_msg}\n選好牌後點「確認出牌」",
+            f"<@{current.discord_id}> 輪到你出牌！\n"
+            f"{hand_msg}\n"
+            "選好牌後點「確認出牌」。\n"
+            "提示：本回合按鈕 30 分鐘後會失效；如果卡住，請用 `/reset` 後重新 `/create`。",
             view=hand_view,
         )
 
@@ -160,10 +209,8 @@ class LionsBarCog(commands.Cog):
 
 
 class ConfirmPlayView(discord.ui.View):
-    """確認出牌按鈕，會帶出 ClaimView"""
-
     def __init__(self, cog, current_player_id: int, hand_view: "HandView"):
-        super().__init__(timeout=60)
+        super().__init__(timeout=VIEW_TIMEOUT)
         self.cog = cog
         self.current_player_id = current_player_id
         self.hand_view = hand_view
@@ -173,11 +220,13 @@ class ConfirmPlayView(discord.ui.View):
         if interaction.user.id != self.current_player_id:
             await interaction.response.send_message("還沒輪到你！", ephemeral=True)
             return
+
         if not self.hand_view.selected_indices:
             await interaction.response.send_message("請先選擇要打出的牌！", ephemeral=True)
             return
 
         claim_view = ClaimView(self.cog, self.current_player_id, self.hand_view.selected_indices)
+
         await interaction.response.send_message(
             f"選了 {len(self.hand_view.selected_indices)} 張牌，聲稱是？",
             view=claim_view,
