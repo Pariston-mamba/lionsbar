@@ -1,12 +1,12 @@
-from game import Player, GameSession, MAX_HP
+from game import Player, GameSession, MAX_HP, JOKER
 
-R = "\u001b[31m"   # 紅
-G = "\u001b[32m"   # 綠
-Y = "\u001b[33m"   # 黃
-B = "\u001b[34m"   # 藍
-M = "\u001b[35m"   # 洋紅
-C = "\u001b[36m"   # 青
-W = "\u001b[37m"   # 白
+R = "\u001b[31m"
+G = "\u001b[32m"
+Y = "\u001b[33m"
+B = "\u001b[34m"
+M = "\u001b[35m"
+C = "\u001b[36m"
+W = "\u001b[37m"
 GRAY = "\u001b[30m"
 BOLD = "\u001b[1m"
 RESET = "\u001b[0m"
@@ -18,38 +18,47 @@ def ansi(text: str) -> str:
 
 def fmt_hp_board(session: GameSession) -> str:
     lines = [f"{BOLD}{W}── 血量狀態 ──{RESET}"]
-    for i, p in enumerate(session.players):
+
+    for player in session.players:
         is_current = (
-            session.players[session.current_turn].discord_id == p.discord_id
-            and p.is_alive
+            session.state.value == "playing"
+            and session.players[session.current_turn].discord_id == player.discord_id
+            and player.is_alive
         )
-        if not p.is_alive:
-            lines.append(f"{GRAY}  {p.display_name:<14} ✕ 淘汰{RESET}")
+
+        if not player.is_alive:
+            lines.append(f"{GRAY}  {player.display_name:<14} ✕ 淘汰{RESET}")
             continue
 
-        if p.hp >= 4:
+        if player.hp >= 4:
             hp_color = G
-        elif p.hp >= 2:
+        elif player.hp >= 2:
             hp_color = Y
         else:
             hp_color = R
 
-        hearts = f"{hp_color}{'♥ ' * p.hp}{RESET}{GRAY}{'♡ ' * (MAX_HP - p.hp)}{RESET}"
+        hearts = f"{hp_color}{'♥ ' * player.hp}{RESET}{GRAY}{'♡ ' * (MAX_HP - player.hp)}{RESET}"
         arrow = f"{Y}▶ {RESET}" if is_current else "  "
-        lines.append(f"{arrow}{BOLD}{p.display_name:<14}{RESET} {hearts}")
+        hand_count = f"{GRAY}({len(player.hand)} 張){RESET}"
+
+        lines.append(f"{arrow}{BOLD}{player.display_name:<14}{RESET} {hearts} {hand_count}")
 
     return ansi("\n".join(lines))
 
 
 def fmt_hand(hand: list[str]) -> str:
-    cards = "  ".join(f"{BOLD}{C}[ {c} ]{RESET}" for c in hand)
+    if not hand:
+        return ansi(f"{GRAY}你本輪已經沒有手牌。{RESET}")
+
+    cards = "  ".join(f"{BOLD}{C}[ {card} ]{RESET}" for card in hand)
     return ansi(f"{W}你的手牌：{RESET}\n{cards}")
 
 
 def fmt_reveal(claim, is_lying: bool, loser_name: str) -> str:
     colored = []
+
     for card in claim.actual_cards:
-        if card == claim.claimed_rank:
+        if card == claim.claimed_rank or card == JOKER:
             colored.append(f"{G}{card}{RESET}")
         else:
             colored.append(f"{R}{card}{RESET}")
@@ -64,6 +73,7 @@ def fmt_reveal(claim, is_lying: bool, loser_name: str) -> str:
         "",
         f"{verdict}  →  {loser_line}",
     ]
+
     return ansi("\n".join(lines))
 
 
@@ -78,6 +88,7 @@ def fmt_play_announce(player_name: str, claimed_rank: str, claimed_count: int) -
 def fmt_eliminated(player_name: str, hp_left: int) -> str:
     if hp_left <= 0:
         return ansi(f"{BOLD}{R}💀 {player_name} 已被淘汰！{RESET}")
+
     return ansi(f"{R}{player_name} 剩餘 {hp_left} 滴血{RESET}")
 
 
@@ -91,8 +102,12 @@ def fmt_winner(player_name: str) -> str:
 def fmt_lobby(session: GameSession) -> str:
     if not session.players:
         return ansi(f"{GRAY}還沒有玩家加入{RESET}")
+
     lines = [f"{BOLD}{W}── 房間玩家 ──{RESET}"]
-    for i, p in enumerate(session.players):
-        lines.append(f"  {C}{i + 1}.{RESET} {p.display_name}")
+
+    for i, player in enumerate(session.players):
+        lines.append(f"  {C}{i + 1}.{RESET} {player.display_name}")
+
     lines.append(f"\n{GRAY}人數：{len(session.players)} / 6{RESET}")
+
     return ansi("\n".join(lines))
